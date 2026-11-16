@@ -34,8 +34,19 @@ public class FindingsTest {
         var sign = new Findings.TextHit("Exit", new Findings.Box(.43f, .2f, .45f, .24f));
         var left = new Findings.ObjectHit("Door", .9f, new Findings.Box(.1f, .28f, .4f, .95f));
         var right = new Findings.ObjectHit("Door", .7f, new Findings.Box(.49f, .28f, .8f, .95f));
-        assertTrue(Findings.nearbyText(new Findings.Scene(
-            Arrays.asList(left, right), Collections.singletonList(sign), true, true)).isEmpty());
+        var scene = new Findings.Scene(Arrays.asList(left, right), Collections.singletonList(sign), true, true);
+        assertTrue(Findings.nearbyText(scene).isEmpty());
+        assertEquals("Door on the left. Door on the right. Text in view reads Exit.", Findings.spokenSummary(scene));
+    }
+
+    @Test public void spokenSummaryPairsSignsOnlyWithFreshDoorDetections() {
+        var left = new Findings.ObjectHit("Door", .9f, new Findings.Box(.1f, .22f, .4f, .9f));
+        var right = new Findings.ObjectHit("Door", .7f, new Findings.Box(.6f, .22f, .9f, .9f), true);
+        var room = new Findings.TextHit("Room 204", new Findings.Box(.2f, .3f, .27f, .35f));
+        var exit = new Findings.TextHit("Exit", new Findings.Box(.7f, .3f, .78f, .35f));
+        var scene = new Findings.Scene(Arrays.asList(right, left), Arrays.asList(room, exit), true, true);
+        assertEquals("Door on the left. Nearby text reads Room 204. Door last seen on the right. Text in view reads Exit.",
+            Findings.spokenSummary(scene));
     }
 
     private static void anchor(float[][] data, int index, float x, float y, float w, float h, int cls, float score) {

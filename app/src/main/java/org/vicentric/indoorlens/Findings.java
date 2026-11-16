@@ -3,8 +3,10 @@ package org.vicentric.indoorlens;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 final class Findings {
     private static final String[] LABELS = {
@@ -23,7 +25,8 @@ final class Findings {
             return intersection / (width() * height() + other.width() * other.height() - intersection);
         }
     }
-    record ObjectHit(String label, float score, Box box) {
+    record ObjectHit(String label, float score, Box box, boolean held) {
+        ObjectHit(String label, float score, Box box) { this(label, score, box, false); }
         boolean isDoor() { return "Door".equals(label); }
     }
     record TextHit(String text, Box box) {}
@@ -73,9 +76,41 @@ final class Findings {
                 if (match != null) { match = null; break; }
                 match = door;
             }
-            if (match != null) result.put(text, match);
+            if (match != null && !match.held()) result.put(text, match);
         }
         return result;
+    }
+
+    static String spokenSummary(Scene scene) {
+        var nearby = nearbyText(scene);
+        var phrases = new ArrayList<String>();
+        var otherObjects = new LinkedHashSet<String>();
+        for (var hit : scene.objects()) {
+            if (!hit.isDoor()) otherObjects.add(hit.label());
+        }
+        scene.objects().stream().filter(ObjectHit::isDoor)
+            .sorted(Comparator.comparingDouble(hit -> hit.box().x())).forEach(door -> {
+                float x = door.box().x();
+                String direction = x < .38f ? "on the left" : x > .62f ? "on the right" : "in the center";
+                phrases.add((door.held() ? "Door last seen " : "Door ") + direction);
+                String signs = readText(scene.text(), nearby, door);
+                if (!signs.isEmpty()) phrases.add("Nearby text reads " + signs);
+            });
+        if (!otherObjects.isEmpty()) phrases.add("Also in view: " + String.join(", ", otherObjects));
+        String otherText = readText(scene.text(), nearby, null);
+        if (!otherText.isEmpty()) phrases.add("Text in view reads " + otherText);
+        return phrases.isEmpty() ? "" : String.join(". ", phrases) + ".";
+    }
+
+    private static String readText(List<TextHit> blocks, Map<TextHit, ObjectHit> nearby, ObjectHit door) {
+        var phrases = new LinkedHashSet<String>();
+        for (var block : blocks) {
+            if (!Objects.equals(nearby.get(block), door)) continue;
+            phrases.add(block.text());
+            if (phrases.size() == 3) break;
+        }
+        String text = String.join(", ", phrases);
+        return text.length() > 180 ? text.substring(0, 179) + "…" : text;
     }
 
     static float clip(float value) { return Math.max(0, Math.min(1, value)); }

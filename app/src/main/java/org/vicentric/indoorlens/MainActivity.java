@@ -229,11 +229,13 @@ public final class MainActivity extends ComponentActivity {
         overlay.update(result);
         overlay.removeCallbacks(expire);
         overlay.postDelayed(expire, 5500);
-        long doors = result.objects().stream().filter(Findings.ObjectHit::isDoor).count();
+        long doors = result.objects().stream().filter(hit -> hit.isDoor() && !hit.held()).count();
+        long heldDoors = result.objects().stream().filter(Findings.ObjectHit::held).count();
         var labels = new LinkedHashSet<String>();
         for (var item : result.objects()) if (!item.isDoor()) labels.add(item.label());
-        boolean empty = doors == 0 && labels.isEmpty();
+        boolean empty = doors == 0 && heldDoors == 0 && labels.isEmpty();
         headline.setText(doors > 0 ? (doors == 1 ? "Door detected" : doors + " doors detected")
+            : heldDoors > 0 ? (heldDoors == 1 ? "Door last seen" : "Doors last seen")
             : !result.objectsOk() ? "Object scan unavailable"
             : empty ? (result.text().isEmpty() ? "No objects detected" : "Text detected") : "Objects detected");
         objects.setText(labels.isEmpty() ? (empty ? "Aim steadily and include the whole doorway." : "Keep the sign in view to read it.")
@@ -265,9 +267,8 @@ public final class MainActivity extends ComponentActivity {
             Toast.makeText(this, "Install an offline English voice to read results aloud.", Toast.LENGTH_SHORT).show();
             return;
         }
-        speech.speak(headline.getText() + ". " + (scene.objects().stream().anyMatch(hit -> !hit.isDoor())
-            ? objects.getText() + ". " : "") + (scene.text().isEmpty() ? "" : text.getText()),
-            TextToSpeech.QUEUE_FLUSH, null, "scan");
+        String summary = Findings.spokenSummary(scene);
+        if (!summary.isEmpty()) speech.speak(summary, TextToSpeech.QUEUE_FLUSH, null, "scan");
     }
 
     private void buildScreen() {
@@ -402,7 +403,7 @@ public final class MainActivity extends ComponentActivity {
             for (var hit : result.objects()) {
                 var box = hit.box();
                 float left = box.left() * w, top = box.top() * h, right = box.right() * w, bottom = box.bottom() * h;
-                paint.setColor(hit.isDoor() ? MINT : 0xffc2d6ff);
+                paint.setColor(hit.held() ? 0xff7fa996 : hit.isDoor() ? MINT : 0xffc2d6ff);
                 paint.setStyle(Paint.Style.STROKE);
                 canvas.drawRoundRect(left, top, right, bottom, dp(6), dp(6), paint);
                 paint.setStyle(Paint.Style.FILL);

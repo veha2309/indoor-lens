@@ -4,13 +4,17 @@ Indoor Lens is a standalone Android demo for offline door and indoor object
 detection and sign reading. Point the rear camera at a doorway or sign to see
 object boxes and text, with no setup or manual labels in the app.
 Tap **Read aloud** to hear the current results with an installed offline English
-voice. Tap **Pause camera** to stop scanning.
+voice. It describes each door's position in the camera view and reads any
+unambiguous nearby text. Tap **Pause camera** to stop scanning.
 
 The app can detect doors, stairs, ramps, chairs, tables, couches, cabinets,
 refrigerators, windows, and poles. OCR reads Latin-script text from the same
 frame. If a text block is close to just one visible door, the app shows it as
 “Near door.” It does not assign a room identity or determine whether it is safe
 to pass. Unmatched or ambiguous text appears under “Text in view.”
+When the view stays steady, a door box can remain visible for one missed scan
+as a dimmed result. Read aloud describes it as last seen and reads the current
+text separately.
 
 ## Build and install
 
@@ -23,6 +27,8 @@ are kept outside this source repository. A build without the file can still
 read signs but cannot detect objects.
 
 ```powershell
+New-Item -ItemType Directory -Force app/src/main/assets | Out-Null
+Copy-Item 'C:\path\to\best.onnx' app/src/main/assets/indoor_detector.onnx
 .\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 adb install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 ```

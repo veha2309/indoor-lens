@@ -22,6 +22,7 @@ final class CameraScanner implements AutoCloseable {
     private IndoorDetector detector;
     private boolean detectorFailed;
     private long readyAt;
+    private final DoorStabilizer stabilizer = new DoorStabilizer();
 
     CameraScanner(Context context) {
         this.context = context.getApplicationContext();
@@ -30,7 +31,8 @@ final class CameraScanner implements AutoCloseable {
 
     /** Returns null for a skipped frame, leaving CPU time for the preview and other apps. */
     Findings.Scene analyze(ImageProxy image) {
-        if (SystemClock.elapsedRealtime() < readyAt) return null;
+        long timestamp = SystemClock.elapsedRealtime();
+        if (timestamp < readyAt) return null;
         var raw = image.toBitmap();
         var crop = image.getCropRect();
         var rotation = new Matrix();
@@ -68,7 +70,8 @@ final class CameraScanner implements AutoCloseable {
             } catch (Exception e) {
                 Log.w("IndoorLens", "Could not read this frame", e);
             }
-            return new Findings.Scene(objects, text, objectsOk, ocrOk);
+            var scene = new Findings.Scene(objects, text, objectsOk, ocrOk);
+            return stabilizer.update(scene, lumaThumbnail(frame), timestamp);
         } finally {
             if (frame != raw) frame.recycle();
             raw.recycle();
@@ -77,6 +80,21 @@ final class CameraScanner implements AutoCloseable {
                     && power.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_MODERATE)
                 ? 2400L : 750L);
         }
+    }
+
+    private static byte[] lumaThumbnail(Bitmap frame) {
+        final int side = 24;
+        var thumbnail = Bitmap.createScaledBitmap(frame, side, side, true);
+        int[] pixels = new int[side * side];
+        thumbnail.getPixels(pixels, 0, side, 0, 0, side, side);
+        if (thumbnail != frame) thumbnail.recycle();
+        byte[] luma = new byte[pixels.length];
+        for (int i = 0; i < pixels.length; i++) {
+            int pixel = pixels[i];
+            int red = (pixel >>> 16) & 255, green = (pixel >>> 8) & 255, blue = pixel & 255;
+            luma[i] = (byte) ((77 * red + 150 * green + 29 * blue) >>> 8);
+        }
+        return luma;
     }
 
     @Override public void close() {
