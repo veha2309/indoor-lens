@@ -20,51 +20,64 @@ import java.util.List;
 
 /** Owned by the serial camera worker, including initialization and teardown. */
 final class IndoorDetector implements AutoCloseable {
-    private static final int SIDE = 640;
-    private static final int AREA = SIDE * SIDE;
-    private static final long[] SHAPE = {1, 3, SIDE, SIDE};
     private final OrtEnvironment env = OrtEnvironment.getEnvironment();
     private final OrtSession session;
-    private final Bitmap input = Bitmap.createBitmap(SIDE, SIDE, Bitmap.Config.ARGB_8888);
-    private final Canvas canvas = new Canvas(input);
+    private final int side;
+    private final Bitmap input;
+    private final Canvas canvas;
     private final Paint filter = new Paint(Paint.FILTER_BITMAP_FLAG);
-    private final int[] pixels = new int[AREA];
-    private final FloatBuffer rgb = ByteBuffer.allocateDirect(3 * AREA * Float.BYTES)
-        .order(ByteOrder.nativeOrder()).asFloatBuffer();
+    private final int[] pixels;
+    private final FloatBuffer rgb;
 
-    IndoorDetector(Context context) throws IOException, OrtException {
-        try (var asset = context.getAssets().openFd("indoor_detector.onnx");
+    IndoorDetector(Context context, String filename, int side) throws IOException, OrtException {
+        this.side = side;
+        try (var asset = context.getAssets().openFd(filename);
              var model = asset.createInputStream();
              var options = new OrtSession.SessionOptions()) {
             options.setIntraOpNumThreads(2);
             options.setInterOpNumThreads(1);
             options.addConfigEntry("session.intra_op.allow_spinning", "0");
-            // Map the bundled weights directly instead of copying 38 MB into the Java heap.
+            // Map the bundled weights directly so the Java heap does not hold a copy.
             var bytes = model.getChannel().map(FileChannel.MapMode.READ_ONLY,
                 asset.getStartOffset(), asset.getLength());
             session = env.createSession(bytes, options);
-        } catch (IOException | OrtException | RuntimeException e) {
-            input.recycle();
-            throw e;
         }
+        input = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888);
+        canvas = new Canvas(input);
+        pixels = new int[side * side];
+        rgb = ByteBuffer.allocateDirect(3 * pixels.length * Float.BYTES)
+            .order(ByteOrder.nativeOrder()).asFloatBuffer();
     }
 
     List<Findings.ObjectHit> detect(Bitmap frame) throws OrtException {
-        float scale = (float) SIDE / Math.max(frame.getWidth(), frame.getHeight());
-        int w = Math.round(scale * frame.getWidth()), h = Math.round(scale * frame.getHeight());
-        int x = (SIDE - w) / 2, y = (SIDE - h) / 2;
+        return detect(frame, 0f, false);
+    }
+
+    List<Findings.ObjectHit> detectDoors(Bitmap frame) throws OrtException {
+        // Give narrow door panels more input pixels on the small model.
+        return detect(frame, .85f, true);
+    }
+
+    private List<Findings.ObjectHit> detect(Bitmap frame, float stretch, boolean doorsOnly) throws OrtException {
+        float scale = (float) side / Math.max(frame.getWidth(), frame.getHeight());
+        int w = Math.round(scale * frame.getWidth() * (1 - stretch) + side * stretch);
+        int h = Math.round(scale * frame.getHeight() * (1 - stretch) + side * stretch);
+        int x = (side - w) / 2, y = (side - h) / 2;
         canvas.drawColor(Color.rgb(114, 114, 114));
         canvas.drawBitmap(frame, null, new Rect(x, y, x + w, y + h), filter);
-        input.getPixels(pixels, 0, SIDE, 0, 0, SIDE, SIDE);
-        for (int i = 0; i < AREA; i++) {
+        input.getPixels(pixels, 0, side, 0, 0, side, side);
+        int area = pixels.length;
+        for (int i = 0; i < area; i++) {
             int color = pixels[i];
             rgb.put(i, ((color >> 16) & 255) / 255f);
-            rgb.put(AREA + i, ((color >> 8) & 255) / 255f);
-            rgb.put(2 * AREA + i, (color & 255) / 255f);
+            rgb.put(area + i, ((color >> 8) & 255) / 255f);
+            rgb.put(2 * area + i, (color & 255) / 255f);
         }
-        try (var tensor = OnnxTensor.createTensor(env, rgb, SHAPE);
+        try (var tensor = OnnxTensor.createTensor(env, rgb, new long[]{1, 3, side, side});
              var result = session.run(Collections.singletonMap("images", tensor))) {
-            return Findings.decode(((float[][][]) result.get(0).getValue())[0], x, y, w, h);
+            var prediction = ((float[][][]) result.get(0).getValue())[0];
+            return doorsOnly ? Findings.decodeDoors(prediction, x, y, w, h)
+                : Findings.decode(prediction, x, y, w, h);
         }
     }
 

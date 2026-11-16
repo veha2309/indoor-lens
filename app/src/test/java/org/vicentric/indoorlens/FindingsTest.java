@@ -44,6 +44,36 @@ public class FindingsTest {
         assertTrue(Findings.spokenSummary(scene).contains("2 chairs"));
     }
 
+    @Test public void cabinetDrawersCountAsTheirCabinetAndSeparateColumnsStaySeparate() {
+        float[][] prediction = new float[16][5];
+        anchor(prediction, 0, 450, 250, 140, 80, 6, .85f);
+        anchor(prediction, 1, 451, 329, 142, 78, 6, .8f);
+        anchor(prediction, 2, 446, 404, 147, 76, 6, .75f);
+        anchor(prediction, 3, 582, 322, 108, 82, 6, .7f);
+        anchor(prediction, 4, 581, 402, 108, 80, 6, .68f);
+        var objects = Findings.decode(prediction, 0, 0, 640, 640);
+
+        assertEquals(2, objects.size());
+        assertTrue(objects.get(0).box().height() > .30f);
+        assertEquals(Collections.singletonList("2 cabinets"), Findings.otherObjectCounts(
+            new Findings.Scene(objects, Collections.emptyList(), true, true)));
+    }
+
+    @Test public void doorPassAddsDistinctPanelsWithoutCountingHandlesOrCabinetsAsDoors() {
+        float[][] prediction = new float[8][4];
+        anchor(prediction, 0, 54, 170, 30, 100, 0, .51f);
+        anchor(prediction, 1, 150, 178, 60, 155, 0, .44f);
+        anchor(prediction, 2, 150, 174, 13, 37, 1, .9f);
+        prediction[4][2] = .6f;
+        anchor(prediction, 3, 245, 180, 66, 120, 0, .47f);
+        var cabinet = new Findings.ObjectHit("Cabinet", .8f, new Findings.Box(.63f, .3f, .9f, .82f));
+        var doorPass = Findings.decodeDoors(prediction, 9, 0, 302, 320);
+        var merged = Findings.withDoorDetections(Collections.singletonList(cabinet), doorPass);
+        assertEquals(2, merged.stream().filter(Findings.ObjectHit::isDoor).count());
+        assertEquals(3, merged.size());
+        assertEquals(3, Findings.withDoorDetections(merged, doorPass).size());
+    }
+
     @Test public void textBetweenCompetingDoorsStaysUnassigned() {
         var sign = new Findings.TextHit("Exit", new Findings.Box(.43f, .2f, .45f, .24f));
         var left = new Findings.ObjectHit("Door", .9f, new Findings.Box(.1f, .28f, .4f, .95f));

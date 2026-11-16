@@ -29,6 +29,8 @@ read signs but cannot detect objects.
 ```powershell
 New-Item -ItemType Directory -Force app/src/main/assets | Out-Null
 Copy-Item 'C:\path\to\best.onnx' app/src/main/assets/indoor_detector.onnx
+# Optional. Use the separate 320 px door checkpoint described under Model and phone load.
+Copy-Item 'C:\path\to\door\best.onnx' app/src/main/assets/door_detector.onnx
 .\gradlew.bat :app:assembleDebug :app:testDebugUnitTest :app:lintDebug
 adb install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
 ```
@@ -43,6 +45,15 @@ Vision Helper.
 
 The demo reuses the project's existing 12-class YOLO11s navigation model
 (`vision_assistant/training_runs/yolo11s_navigation_finetune/weights/best.onnx`).
+The optional 320 px YOLO11n checkpoint
+(`vision_assistant/runs/detect/training_runs/door_yolo11n/weights/best.onnx`)
+can look for narrow door panels when the main model finds fewer than two
+doors. Its extra detections appear as “Possible door.” The extra pass is
+skipped in Battery Saver or when Android reports moderate thermal throttling.
+
+Door checkpoint SHA-256:
+`6b605ee59abc0619b8f3cf0203e6040082c0a5a6b08ccea2fb94bfcebb446fd7`.
+
 It keeps the original 640 px input to preserve small door details. CameraX
 displays a continuous preview while one worker analyzes the latest frame with
 two ONNX Runtime CPU threads. After each scan it waits at least 750 ms, or

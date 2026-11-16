@@ -20,7 +20,9 @@ final class CameraScanner implements AutoCloseable {
     private final com.google.mlkit.vision.text.TextRecognizer ocr =
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private IndoorDetector detector;
+    private IndoorDetector doorDetector;
     private boolean detectorFailed;
+    private boolean doorDetectorUnavailable;
     private long readyAt;
     private final DoorStabilizer stabilizer = new DoorStabilizer();
 
@@ -44,13 +46,26 @@ final class CameraScanner implements AutoCloseable {
             boolean objectsOk = false;
             try {
                 if (!detectorFailed) {
-                    if (detector == null) detector = new IndoorDetector(context);
+                    if (detector == null) detector = new IndoorDetector(context, "indoor_detector.onnx", 640);
                     objects = detector.detect(frame);
                     objectsOk = true;
                 }
             } catch (Exception | LinkageError e) {
                 detectorFailed = true;
                 Log.e("IndoorLens", "Object detection is unavailable", e);
+            }
+            if (objectsOk && !reducedRate() && !doorDetectorUnavailable
+                    && objects.stream().filter(Findings.ObjectHit::isDoor).count() < 2) {
+                try {
+                    if (doorDetector == null) doorDetector = new IndoorDetector(context, "door_detector.onnx", 320);
+                    objects = Findings.withDoorDetections(objects, doorDetector.detectDoors(frame));
+                } catch (java.io.FileNotFoundException e) {
+                    doorDetectorUnavailable = true;
+                    Log.i("IndoorLens", "Optional door detector is not bundled");
+                } catch (Exception | LinkageError e) {
+                    doorDetectorUnavailable = true;
+                    Log.w("IndoorLens", "Door detector is unavailable", e);
+                }
             }
             var text = new ArrayList<Findings.TextHit>();
             boolean ocrOk = false;
@@ -75,11 +90,13 @@ final class CameraScanner implements AutoCloseable {
         } finally {
             if (frame != raw) frame.recycle();
             raw.recycle();
-            readyAt = SystemClock.elapsedRealtime() + (power.isPowerSaveMode()
-                || (android.os.Build.VERSION.SDK_INT >= 29
-                    && power.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_MODERATE)
-                ? 2400L : 750L);
+            readyAt = SystemClock.elapsedRealtime() + (reducedRate() ? 2400L : 750L);
         }
+    }
+
+    private boolean reducedRate() {
+        return power.isPowerSaveMode() || (android.os.Build.VERSION.SDK_INT >= 29
+            && power.getCurrentThermalStatus() >= PowerManager.THERMAL_STATUS_MODERATE);
     }
 
     private static byte[] lumaThumbnail(Bitmap frame) {
@@ -99,9 +116,13 @@ final class CameraScanner implements AutoCloseable {
 
     @Override public void close() {
         ocr.close();
-        if (detector != null) {
-            try { detector.close(); }
-            catch (Exception e) { Log.w("IndoorLens", "Could not close detector", e); }
-        }
+        closeDetector(detector);
+        closeDetector(doorDetector);
+    }
+
+    private static void closeDetector(IndoorDetector detector) {
+        if (detector == null) return;
+        try { detector.close(); }
+        catch (Exception e) { Log.w("IndoorLens", "Could not close detector", e); }
     }
 }

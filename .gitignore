@@ -3,3 +3,4 @@
 /local.properties
 **/build/
 /app/src/main/assets/indoor_detector.onnx
+/app/src/main/assets/door_detector.onnx

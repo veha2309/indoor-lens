@@ -230,11 +230,15 @@ public final class MainActivity extends ComponentActivity {
         overlay.update(result);
         overlay.removeCallbacks(expire);
         overlay.postDelayed(expire, 5500);
-        long doors = result.objects().stream().filter(hit -> hit.isDoor() && !hit.held()).count();
+        long doors = result.objects().stream().filter(hit -> hit.isDoor() && !hit.held() && !hit.tentative()).count();
+        long possibleDoors = result.objects().stream().filter(Findings.ObjectHit::tentative).count();
         long heldDoors = result.objects().stream().filter(Findings.ObjectHit::held).count();
         var labels = Findings.otherObjectCounts(result);
-        boolean empty = doors == 0 && heldDoors == 0 && labels.isEmpty();
+        String possibleLabel = possibleDoors == 1 ? "Possible door" : possibleDoors + " possible doors";
+        if (doors > 0 && possibleDoors > 0) labels.add(0, possibleLabel);
+        boolean empty = doors == 0 && possibleDoors == 0 && heldDoors == 0 && labels.isEmpty();
         headline.setText(doors > 0 ? (doors == 1 ? "Door detected" : doors + " doors detected")
+            : possibleDoors > 0 ? possibleLabel
             : heldDoors > 0 ? (heldDoors == 1 ? "Door last seen" : "Doors last seen")
             : !result.objectsOk() ? "Object scan unavailable"
             : empty ? (result.text().isEmpty() ? "No objects detected" : "Text detected") : "Objects detected");
@@ -420,7 +424,8 @@ public final class MainActivity extends ComponentActivity {
 
         private void drawLabel(Canvas canvas, Findings.ObjectHit hit, ArrayList<RectF> occupied, float w, float h) {
             float padding = dp(3);
-            float width = paint.measureText(hit.label()) + 2 * padding;
+            String label = hit.displayLabel();
+            float width = paint.measureText(label) + 2 * padding;
             float height = paint.descent() - paint.ascent() + 2 * padding;
             float x = Math.max(0, Math.min(hit.box().left() * w, w - width));
             float top = hit.box().top() * h;
@@ -431,7 +436,7 @@ public final class MainActivity extends ComponentActivity {
                 if (occupied.stream().anyMatch(used -> RectF.intersects(used, bounds))) continue;
                 occupied.add(bounds);
                 paint.setColor(hit.isDoor() ? MINT : 0xffe2ebff);
-                canvas.drawText(hit.label(), x + padding, y + padding - paint.ascent(), paint);
+                canvas.drawText(label, x + padding, y + padding - paint.ascent(), paint);
                 break;
             }
         }
