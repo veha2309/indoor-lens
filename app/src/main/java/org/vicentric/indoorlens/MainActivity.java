@@ -15,6 +15,7 @@ import android.os.SystemClock;
 import android.provider.Settings;
 import android.speech.tts.TextToSpeech;
 import android.text.TextUtils;
+import android.text.TextPaint;
 import android.view.Gravity;
 import android.view.View;
 import android.view.WindowInsets;
@@ -33,8 +34,10 @@ import androidx.camera.core.UseCaseGroup;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
+import java.util.Collections;
+import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends ComponentActivity {
@@ -161,10 +164,9 @@ public final class MainActivity extends ComponentActivity {
                         try {
                             if (token != generation) return;
                             if (scanner == null) scanner = new CameraScanner(this);
-                            var result = scanner.analyze(image);
-                            if (result != null) runOnUiThread(() -> {
-                                if (token == generation) render(result);
-                            });
+                            scanner.analyze(image, (result, textPending) -> runOnUiThread(() -> {
+                                if (token == generation) render(result, textPending);
+                            }));
                         } catch (Exception e) {
                             android.util.Log.e("IndoorLens", "Camera analysis failed", e);
                             runOnUiThread(() -> {
@@ -216,7 +218,7 @@ public final class MainActivity extends ComponentActivity {
     private void showWaiting(String message) {
         scene = null;
         overlay.removeCallbacks(expire);
-        overlay.update(null);
+        overlay.update(null, Collections.emptyList(), Collections.emptySet());
         headline.setText(active ? "Scanning" : "Ready to scan");
         objects.setText(message);
         text.setText("Sign text appears here");
@@ -224,10 +226,15 @@ public final class MainActivity extends ComponentActivity {
         read.setEnabled(false);
     }
 
-    private void render(Findings.Scene result) {
+    private void render(Findings.Scene result, boolean textPending) {
+        // Keep readable text steady while refreshing an otherwise similar result.
+        if (textPending && scene != null && !scene.text().isEmpty()
+                && sameVisibleObjects(scene, result)) return;
         scene = result;
         displayedAt = SystemClock.elapsedRealtime();
-        overlay.update(result);
+        var near = Findings.nearbyText(result);
+        var numberedDoors = Findings.numberedDoors(result, near);
+        overlay.update(result, numberedDoors, near.keySet());
         overlay.removeCallbacks(expire);
         overlay.postDelayed(expire, 5500);
         long doors = result.objects().stream().filter(hit -> hit.isDoor() && !hit.held() && !hit.tentative()).count();
@@ -241,27 +248,40 @@ public final class MainActivity extends ComponentActivity {
             : possibleDoors > 0 ? possibleLabel
             : heldDoors > 0 ? (heldDoors == 1 ? "Door last seen" : "Doors last seen")
             : !result.objectsOk() ? "Object scan unavailable"
-            : empty ? (result.text().isEmpty() ? "No objects detected" : "Text detected") : "Objects detected");
+            : empty ? (result.text().isEmpty() ? "No objects detected" : "Text detected")
+            : "Objects detected");
         objects.setText(labels.isEmpty() ? (empty ? "Aim steadily and include the whole doorway." : "Keep the sign in view to read it.")
             : String.join("  ·  ", labels));
-        var near = Findings.nearbyText(result);
-        String doorText = joinText(result, near, true), sceneText = joinText(result, near, false);
-        String textResult = (doorText.isEmpty() ? "" : "Near door: " + doorText)
-            + (!doorText.isEmpty() && !sceneText.isEmpty() ? "\n" : "")
-            + (sceneText.isEmpty() ? "" : "Text in view: " + sceneText);
-        text.setText(textResult.isEmpty() ? (result.ocrOk() ? "No readable text" : "Text scan unavailable") : textResult);
+        var textLines = new ArrayList<String>();
+        for (var door : numberedDoors) {
+            if (!door.sign().isEmpty()) textLines.add(door.name() + ": " + door.sign());
+        }
+        String sceneText = Findings.readText(result.text(), near, null);
+        if (!sceneText.isEmpty()) textLines.add("Text in view: " + sceneText);
+        String textResult = String.join("\n", textLines);
+        text.setText(textPending ? "Reading text…" : textResult.isEmpty()
+            ? (result.ocrOk() ? "No readable text" : "Text scan unavailable") : textResult);
         text.setTextColor(textResult.isEmpty() ? MUTED : AMBER);
         read.setEnabled(!empty || !textResult.isEmpty());
     }
 
-    private static String joinText(Findings.Scene scene, java.util.Map<Findings.TextHit, Findings.ObjectHit> near, boolean matched) {
-        var parts = new LinkedHashSet<String>();
-        for (var block : scene.text()) {
-            if (near.containsKey(block) == matched) parts.add(block.text());
-            if (parts.size() >= 3) break;
+    private static boolean sameVisibleObjects(Findings.Scene previous, Findings.Scene current) {
+        if (previous.objects().size() != current.objects().size()) return false;
+        var unmatched = new ArrayList<>(previous.objects());
+        for (var object : current.objects()) {
+            int match = -1;
+            for (int i = 0; i < unmatched.size(); i++) {
+                var last = unmatched.get(i);
+                if (last.label().equals(object.label()) && last.held() == object.held()
+                        && last.tentative() == object.tentative() && last.box().iou(object.box()) >= .75f) {
+                    match = i;
+                    break;
+                }
+            }
+            if (match < 0) return false;
+            unmatched.remove(match);
         }
-        String output = String.join("  ·  ", parts);
-        return output.length() > 180 ? output.substring(0, 179) + "…" : output;
+        return true;
     }
 
     private void speak() {
@@ -379,14 +399,21 @@ public final class MainActivity extends ComponentActivity {
     private int dp(float n) { return Math.round(n * getResources().getDisplayMetrics().density); }
 
     private final class ScannerOverlay extends View {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        private final TextPaint paint = new TextPaint(Paint.ANTI_ALIAS_FLAG);
         private Findings.Scene result;
+        private List<Findings.NumberedDoor> numberedDoors;
+        private Set<Findings.TextHit> signs;
         ScannerOverlay() {
             super(MainActivity.this);
             setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             paint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
         }
-        void update(Findings.Scene scene) { result = scene; invalidate(); }
+        void update(Findings.Scene scene, List<Findings.NumberedDoor> doors, Set<Findings.TextHit> matchedSigns) {
+            result = scene;
+            numberedDoors = doors;
+            signs = matchedSigns;
+            invalidate();
+        }
         @Override protected void onDraw(Canvas canvas) {
             super.onDraw(canvas);
             float w = getWidth(), h = getHeight();
@@ -408,11 +435,21 @@ public final class MainActivity extends ComponentActivity {
                 drawCorner(canvas, left, bottom, length, -length);
                 drawCorner(canvas, right, bottom, -length, -length);
             }
+            paint.setColor(AMBER);
+            paint.setStyle(Paint.Style.STROKE);
+            for (var sign : signs) {
+                var box = sign.box();
+                canvas.drawRect(box.left() * w, box.top() * h, box.right() * w, box.bottom() * h, paint);
+            }
+            paint.setStyle(Paint.Style.FILL);
             var occupied = new ArrayList<RectF>();
             paint.setTextSize(dp(11));
             paint.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
+            for (var door : numberedDoors) {
+                drawLabel(canvas, door.hit(), door.overlayLabel(), occupied, w, h);
+            }
             for (var hit : result.objects()) {
-                if (!hit.held()) drawLabel(canvas, hit, occupied, w, h);
+                if (!hit.isDoor()) drawLabel(canvas, hit, hit.displayLabel(), occupied, w, h);
             }
             paint.clearShadowLayer();
         }
@@ -422,9 +459,11 @@ public final class MainActivity extends ComponentActivity {
             canvas.drawLine(x, y, x, y + dy, paint);
         }
 
-        private void drawLabel(Canvas canvas, Findings.ObjectHit hit, ArrayList<RectF> occupied, float w, float h) {
+        private void drawLabel(Canvas canvas, Findings.ObjectHit hit, String labelText,
+                               ArrayList<RectF> occupied, float w, float h) {
             float padding = dp(3);
-            String label = hit.displayLabel();
+            String label = TextUtils.ellipsize(labelText, paint, Math.max(0, w * .65f - 2 * padding),
+                TextUtils.TruncateAt.END).toString();
             float width = paint.measureText(label) + 2 * padding;
             float height = paint.descent() - paint.ascent() + 2 * padding;
             float x = Math.max(0, Math.min(hit.box().left() * w, w - width));
@@ -435,7 +474,7 @@ public final class MainActivity extends ComponentActivity {
                 var bounds = new RectF(x, y, x + width, y + height);
                 if (occupied.stream().anyMatch(used -> RectF.intersects(used, bounds))) continue;
                 occupied.add(bounds);
-                paint.setColor(hit.isDoor() ? MINT : 0xffe2ebff);
+                paint.setColor(hit.held() ? MUTED : hit.isDoor() ? MINT : 0xffe2ebff);
                 canvas.drawText(label, x + padding, y + padding - paint.ascent(), paint);
                 break;
             }

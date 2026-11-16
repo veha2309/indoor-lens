@@ -13,10 +13,12 @@ import com.google.mlkit.vision.text.TextRecognition;
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.function.BiConsumer;
 
 final class CameraScanner implements AutoCloseable {
     private final Context context;
     private final PowerManager power;
+    private final boolean debugTiming;
     private final com.google.mlkit.vision.text.TextRecognizer ocr =
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS);
     private IndoorDetector detector;
@@ -29,12 +31,14 @@ final class CameraScanner implements AutoCloseable {
     CameraScanner(Context context) {
         this.context = context.getApplicationContext();
         power = context.getSystemService(PowerManager.class);
+        debugTiming = (context.getApplicationInfo().flags
+            & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
     }
 
-    /** Returns null for a skipped frame, leaving CPU time for the preview and other apps. */
-    Findings.Scene analyze(ImageProxy image) {
+    /** Publish the object boxes while the same frame is still being read for text. */
+    void analyze(ImageProxy image, BiConsumer<Findings.Scene, Boolean> publish) {
         long timestamp = SystemClock.elapsedRealtime();
-        if (timestamp < readyAt) return null;
+        if (timestamp < readyAt) return;
         var raw = image.toBitmap();
         var crop = image.getCropRect();
         var rotation = new Matrix();
@@ -42,6 +46,7 @@ final class CameraScanner implements AutoCloseable {
         Bitmap frame = raw;
         try {
             frame = Bitmap.createBitmap(raw, crop.left, crop.top, crop.width(), crop.height(), rotation, true);
+            long frameReady = SystemClock.elapsedRealtime();
             var objects = Collections.<Findings.ObjectHit>emptyList();
             boolean objectsOk = false;
             try {
@@ -67,6 +72,11 @@ final class CameraScanner implements AutoCloseable {
                     Log.w("IndoorLens", "Door detector is unavailable", e);
                 }
             }
+            var detected = stabilizer.update(
+                new Findings.Scene(objects, Collections.emptyList(), objectsOk, false),
+                lumaThumbnail(frame), timestamp);
+            long objectsReady = SystemClock.elapsedRealtime();
+            if (!detected.objects().isEmpty()) publish.accept(detected, true);
             var text = new ArrayList<Findings.TextHit>();
             boolean ocrOk = false;
             try {
@@ -85,12 +95,23 @@ final class CameraScanner implements AutoCloseable {
             } catch (Exception e) {
                 Log.w("IndoorLens", "Could not read this frame", e);
             }
-            var scene = new Findings.Scene(objects, text, objectsOk, ocrOk);
-            return stabilizer.update(scene, lumaThumbnail(frame), timestamp);
+            long textReady = SystemClock.elapsedRealtime();
+            publish.accept(new Findings.Scene(detected.objects(), text, objectsOk, ocrOk), false);
+            if (debugTiming) {
+                Log.d("IndoorLensLatency", "scan_start_ms=" + timestamp
+                    + " prepare_ms=" + (frameReady - timestamp)
+                    + " objects_ms=" + (objectsReady - frameReady)
+                    + " ocr_ms=" + (textReady - objectsReady)
+                    + " frame_to_objects_ms=" + (objectsReady - timestamp)
+                    + " frame_to_complete_ms=" + (textReady - timestamp));
+            }
         } finally {
             if (frame != raw) frame.recycle();
             raw.recycle();
-            readyAt = SystemClock.elapsedRealtime() + (reducedRate() ? 2400L : 750L);
+            long finished = SystemClock.elapsedRealtime();
+            // Aim for 700 ms between scan starts, with idle time after slower scans.
+            readyAt = reducedRate() ? finished + 2400L
+                : Math.max(timestamp + 700L, finished + Math.max(300L, (finished - timestamp) / 2));
         }
     }
 

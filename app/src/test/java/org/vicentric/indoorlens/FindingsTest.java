@@ -80,7 +80,7 @@ public class FindingsTest {
         var right = new Findings.ObjectHit("Door", .7f, new Findings.Box(.49f, .28f, .8f, .95f));
         var scene = new Findings.Scene(Arrays.asList(left, right), Collections.singletonList(sign), true, true);
         assertTrue(Findings.nearbyText(scene).isEmpty());
-        assertEquals("Door on the left. Door on the right. Text in view reads Exit.", Findings.spokenSummary(scene));
+        assertEquals("Door 1 on the left. Door 2 on the right. Text in view reads Exit.", Findings.spokenSummary(scene));
     }
 
     @Test public void spokenSummaryPairsSignsOnlyWithFreshDoorDetections() {
@@ -89,7 +89,23 @@ public class FindingsTest {
         var room = new Findings.TextHit("Room 204", new Findings.Box(.2f, .3f, .27f, .35f));
         var exit = new Findings.TextHit("Exit", new Findings.Box(.7f, .3f, .78f, .35f));
         var scene = new Findings.Scene(Arrays.asList(right, left), Arrays.asList(room, exit), true, true);
-        assertEquals("Door on the left. Nearby text reads Room 204. Door last seen on the right. Text in view reads Exit.",
+        assertEquals("Door 1 on the left. Label reads Room 204. Door 2 last seen on the right. Text in view reads Exit.",
+            Findings.spokenSummary(scene));
+    }
+
+    @Test public void doorNumbersAndLabelsFollowPositionRatherThanDetectorOrder() {
+        var left = new Findings.ObjectHit("Door", .43f, new Findings.Box(.10f, .2f, .45f, .95f), false, true);
+        var right = new Findings.ObjectHit("Door", .93f, new Findings.Box(.49f, .2f, .88f, .95f));
+        var room = new Findings.TextHit("Room 204", new Findings.Box(.40f, .35f, .44f, .40f));
+        var exit = new Findings.TextHit("Exit", new Findings.Box(.67f, .14f, .74f, .19f));
+        var scene = new Findings.Scene(Arrays.asList(right, left), Arrays.asList(exit, room), true, true);
+        var nearby = Findings.nearbyText(scene);
+        assertEquals(left, nearby.get(room));
+        assertEquals(right, nearby.get(exit));
+        var numbered = Findings.numberedDoors(scene, nearby);
+        assertEquals("Possible door 1 · Room 204", numbered.get(0).overlayLabel());
+        assertEquals("Door 2 · Exit", numbered.get(1).overlayLabel());
+        assertEquals("Possible door 1 on the left. Label reads Room 204. Door 2 on the right. Label reads Exit.",
             Findings.spokenSummary(scene));
     }
 

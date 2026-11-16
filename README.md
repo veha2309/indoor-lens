@@ -4,14 +4,14 @@ Indoor Lens is a standalone Android demo for offline door and indoor object
 detection and sign reading. Point the rear camera at a doorway or sign to see
 object boxes and text, with no setup or manual labels in the app.
 Tap **Read aloud** to hear the current results with an installed offline English
-voice. It describes each door's position in the camera view and reads any
-unambiguous nearby text. Tap **Pause camera** to stop scanning.
+voice. It announces door numbers and any attached sign text. Tap **Pause
+camera** to stop scanning.
 
 The app can detect doors, stairs, ramps, chairs, tables, couches, cabinets,
 refrigerators, windows, and poles. OCR reads Latin-script text from the same
-frame. If a text block is close to just one visible door, the app shows it as
-“Near door.” It does not assign a room identity or determine whether it is safe
-to pass. Unmatched or ambiguous text appears under “Text in view.”
+frame. Doors are numbered from left to right in the camera view. When sign
+text clearly matches a door, the app outlines the sign and shows its text
+next to the door number. Unmatched or ambiguous text appears under “Text in view.”
 When the view stays steady, a door box can remain visible for one missed scan
 as a dimmed result. Read aloud describes it as last seen and reads the current
 text separately.
@@ -56,10 +56,15 @@ Door checkpoint SHA-256:
 
 It keeps the original 640 px input to preserve small door details. CameraX
 displays a continuous preview while one worker analyzes the latest frame with
-two ONNX Runtime CPU threads. After each scan it waits at least 750 ms, or
-2.4 seconds when Battery Saver is on or Android reports moderate thermal
-throttling. Pausing or leaving the app shuts down the camera and releases the
+two ONNX Runtime CPU threads. Object boxes can appear before text recognition
+finishes on the same frame. The scanner aims for 700 ms between scan starts,
+with at least 300 ms of idle time after each scan and more after slow scans.
+Battery Saver or moderate thermal throttling gives the phone 2.4 seconds of
+idle time after each scan. Pausing or leaving the app shuts down the camera and releases the
 inference session once the current frame finishes.
+
+Debug builds log time spent preparing each frame, detecting objects, and
+reading text under the `IndoorLensLatency` logcat tag.
 
 A 56-image desktop check from the existing navigation test split (36 images
 with labeled doors, 20 without) found 33 of 39 labeled door boxes with 7 unmatched

@@ -50,6 +50,13 @@ final class Findings {
     }
     record TextHit(String text, Box box) {}
     record Scene(List<ObjectHit> objects, List<TextHit> text, boolean objectsOk, boolean ocrOk) {}
+    record NumberedDoor(int number, ObjectHit hit, String sign) {
+        String name() { return "Door " + number; }
+        String overlayLabel() {
+            return (hit.tentative() ? "Possible door " + number : name())
+                + (sign.isEmpty() ? "" : " · " + sign);
+        }
+    }
 
     static List<ObjectHit> decode(float[][] output, float padX, float padY, float width, float height) {
         return decode(output, padX, padY, width, height, LABELS, .40f);
@@ -164,16 +171,26 @@ final class Findings {
         Map<TextHit, ObjectHit> result = new HashMap<>();
         for (var text : scene.text()) {
             ObjectHit match = null;
+            int bestRank = 0;
+            boolean ambiguous = false;
             for (var door : scene.objects()) {
                 if (!door.isDoor()) continue;
                 var box = door.box();
                 float x = text.box().x(), y = text.box().y();
                 if (x < box.left() - .22f * box.width() || x > box.right() + .22f * box.width()
                     || y < box.top() - .18f * box.height() || y > box.top() + .85f * box.height()) continue;
-                if (match != null) { match = null; break; }
-                match = door;
+                boolean horizontallyInside = x >= box.left() && x <= box.right();
+                int rank = horizontallyInside && y >= box.top() ? 3 : horizontallyInside ? 2 : 1;
+                if (rank > bestRank) {
+                    match = door;
+                    bestRank = rank;
+                    ambiguous = false;
+                } else if (rank == bestRank) {
+                    ambiguous = true;
+                }
             }
-            if (match != null && !match.held() && !match.tentative()) result.put(text, match);
+            if (match != null && !ambiguous && !match.held()
+                    && (!match.tentative() || bestRank >= 2)) result.put(text, match);
         }
         return result;
     }
@@ -182,21 +199,35 @@ final class Findings {
         var nearby = nearbyText(scene);
         var phrases = new ArrayList<String>();
         var otherObjects = otherObjectCounts(scene);
-        scene.objects().stream().filter(ObjectHit::isDoor)
-            .sorted(Comparator.comparingDouble(hit -> hit.box().x())).forEach(door -> {
-                float x = door.box().x();
-                String direction = x < .38f ? "on the left" : x > .62f ? "on the right" : "in the center";
-                phrases.add((door.held() ? "Door last seen " : door.displayLabel() + " ") + direction);
-                String signs = readText(scene.text(), nearby, door);
-                if (!signs.isEmpty()) phrases.add("Nearby text reads " + signs);
-            });
+        for (var door : numberedDoors(scene, nearby)) {
+            float x = door.hit().box().x();
+            String direction = x < .38f ? "on the left" : x > .62f ? "on the right" : "in the center";
+            String status = door.hit().held() ? " last seen " : " ";
+            String name = door.hit().tentative() ? "Possible door " + door.number() : door.name();
+            phrases.add(name + status + direction);
+            if (!door.sign().isEmpty()) phrases.add("Label reads " + door.sign());
+        }
         if (!otherObjects.isEmpty()) phrases.add("Also in view: " + String.join(", ", otherObjects));
         String otherText = readText(scene.text(), nearby, null);
         if (!otherText.isEmpty()) phrases.add("Text in view reads " + otherText);
         return phrases.isEmpty() ? "" : String.join(". ", phrases) + ".";
     }
 
-    private static String readText(List<TextHit> blocks, Map<TextHit, ObjectHit> nearby, ObjectHit door) {
+    static List<NumberedDoor> numberedDoors(Scene scene, Map<TextHit, ObjectHit> nearby) {
+        var visible = new ArrayList<ObjectHit>();
+        for (var object : scene.objects()) if (object.isDoor()) visible.add(object);
+        visible.sort(Comparator.comparingDouble((ObjectHit hit) -> hit.box().x())
+            .thenComparingDouble(hit -> hit.box().y())
+            .thenComparingDouble(hit -> hit.box().left())
+            .thenComparingDouble(hit -> hit.box().top()));
+        var numbered = new ArrayList<NumberedDoor>();
+        for (var door : visible) {
+            numbered.add(new NumberedDoor(numbered.size() + 1, door, readText(scene.text(), nearby, door)));
+        }
+        return numbered;
+    }
+
+    static String readText(List<TextHit> blocks, Map<TextHit, ObjectHit> nearby, ObjectHit door) {
         var phrases = new LinkedHashSet<String>();
         for (var block : blocks) {
             if (!Objects.equals(nearby.get(block), door)) continue;
