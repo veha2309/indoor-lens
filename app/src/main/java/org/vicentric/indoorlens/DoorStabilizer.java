@@ -23,9 +23,10 @@ final class DoorStabilizer {
 
         var displayed = new ArrayList<>(current.objects());
         for (var hit : last.objects()) {
-            if (displayed.size() >= 8) break;
+            if (displayed.size() >= Findings.MAX_OBJECTS) break;
             if (hit.isDoor() && current.objects().stream().noneMatch(
-                    match -> match.isDoor() && match.box().iou(hit.box()) > .25f)) {
+                    match -> match.isDoor() && match.box().centersClose(hit.box())
+                        && match.box().iou(hit.box()) > .25f)) {
                 displayed.add(new Findings.ObjectHit(hit.label(), hit.score(), hit.box(), true));
             }
         }

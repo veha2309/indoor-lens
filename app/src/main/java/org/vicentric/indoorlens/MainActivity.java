@@ -6,6 +6,7 @@ import android.content.pm.PackageManager;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
@@ -31,6 +32,7 @@ import androidx.camera.core.Preview;
 import androidx.camera.core.UseCaseGroup;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
+import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.Locale;
 import java.util.concurrent.Executors;
@@ -45,7 +47,7 @@ public final class MainActivity extends ComponentActivity {
     private TextToSpeech speech;
     private PreviewView preview;
     private ScannerOverlay overlay;
-    private TextView badge, headline, objects, text, hint;
+    private TextView badge, headline, objects, text;
     private Button camera, read;
     private ProcessCameraProvider provider;
     private ImageAnalysis analysis;
@@ -219,7 +221,6 @@ public final class MainActivity extends ComponentActivity {
         objects.setText(message);
         text.setText("Sign text appears here");
         text.setTextColor(MUTED);
-        hint.setText("On-device scan  •  No setup needed");
         read.setEnabled(false);
     }
 
@@ -231,8 +232,7 @@ public final class MainActivity extends ComponentActivity {
         overlay.postDelayed(expire, 5500);
         long doors = result.objects().stream().filter(hit -> hit.isDoor() && !hit.held()).count();
         long heldDoors = result.objects().stream().filter(Findings.ObjectHit::held).count();
-        var labels = new LinkedHashSet<String>();
-        for (var item : result.objects()) if (!item.isDoor()) labels.add(item.label());
+        var labels = Findings.otherObjectCounts(result);
         boolean empty = doors == 0 && heldDoors == 0 && labels.isEmpty();
         headline.setText(doors > 0 ? (doors == 1 ? "Door detected" : doors + " doors detected")
             : heldDoors > 0 ? (heldDoors == 1 ? "Door last seen" : "Doors last seen")
@@ -247,7 +247,6 @@ public final class MainActivity extends ComponentActivity {
             + (sceneText.isEmpty() ? "" : "Text in view: " + sceneText);
         text.setText(textResult.isEmpty() ? (result.ocrOk() ? "No readable text" : "Text scan unavailable") : textResult);
         text.setTextColor(textResult.isEmpty() ? MUTED : AMBER);
-        hint.setText(result.ocrOk() ? "On-device scan  •  No setup needed" : "Text scan unavailable on this frame");
         read.setEnabled(!empty || !textResult.isEmpty());
     }
 
@@ -277,18 +276,18 @@ public final class MainActivity extends ComponentActivity {
         var root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(BG);
-        root.setPadding(dp(20), dp(14), dp(20), dp(12));
+        root.setPadding(dp(10), dp(6), dp(10), dp(8));
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             if (android.os.Build.VERSION.SDK_INT >= 35) {
                 var bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                v.setPadding(dp(20) + bars.left, dp(14) + bars.top, dp(20) + bars.right, dp(12) + bars.bottom);
+                v.setPadding(dp(10) + bars.left, dp(6) + bars.top, dp(10) + bars.right, dp(8) + bars.bottom);
             }
             return insets;
         });
         setContentView(root);
         var header = new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
-        var title = label("Indoor Lens", 28, INK, true);
+        var title = label("Indoor Lens", 23, INK, true);
         androidx.core.view.ViewCompat.setAccessibilityHeading(title, true);
         header.addView(title, new LinearLayout.LayoutParams(0, -2, 1));
         badge = label("○  PAUSED", 11, MUTED, true);
@@ -296,11 +295,10 @@ public final class MainActivity extends ComponentActivity {
         badge.setBackground(surface(CARD, 20));
         header.addView(badge);
         root.addView(header);
-        root.addView(label("Doors, indoor objects and sign text", 14, MUTED, false));
-        gap(root, 14);
+        gap(root, 7);
 
         var viewport = new FrameLayout(this);
-        viewport.setBackground(surface(0xff080e0c, 20));
+        viewport.setBackground(surface(0xff080e0c, 10));
         viewport.setClipToOutline(true);
         preview = new PreviewView(this);
         preview.setImplementationMode(PreviewView.ImplementationMode.COMPATIBLE);
@@ -311,14 +309,14 @@ public final class MainActivity extends ComponentActivity {
         viewport.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
         root.addView(viewport, new LinearLayout.LayoutParams(-1, 0, 1));
 
-        gap(root, 12);
+        gap(root, 7);
         var card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(16), dp(10), dp(16), dp(10));
-        card.setBackground(surface(CARD, 18));
-        headline = label("", 21, INK, true);
-        objects = label("", 14, MUTED, false);
-        text = label("", 14, AMBER, false);
+        card.setPadding(dp(10), dp(5), dp(10), dp(5));
+        card.setBackground(surface(CARD, 10));
+        headline = label("", 18, INK, true);
+        objects = label("", 13, MUTED, false);
+        text = label("", 13, AMBER, false);
         // Reserve result space so the camera viewport and overlay stay aligned as text changes.
         headline.setSingleLine(true);
         headline.setEllipsize(TextUtils.TruncateAt.END);
@@ -341,10 +339,6 @@ public final class MainActivity extends ComponentActivity {
         camera.setOnClickListener(v -> toggleCamera());
         read.setOnClickListener(v -> speak());
         root.addView(controls);
-        hint = label("", 11, MUTED, false);
-        hint.setGravity(Gravity.CENTER);
-        hint.setPadding(0, dp(6), 0, 0);
-        root.addView(hint);
         showWaiting("Point the camera at a doorway or sign.");
     }
 
@@ -393,8 +387,8 @@ public final class MainActivity extends ComponentActivity {
             super.onDraw(canvas);
             float w = getWidth(), h = getHeight();
             paint.setColor(0xaab5c8bf);
-            paint.setStrokeWidth(dp(2));
-            float x = w / 2, y = h / 2, r = dp(8);
+            paint.setStrokeWidth(dp(1));
+            float x = w / 2, y = h / 2, r = dp(5);
             if (result == null || result.objects().isEmpty()) {
                 canvas.drawLine(x - r, y, x + r, y, paint);
                 canvas.drawLine(x, y - r, x, y + r, paint);
@@ -403,16 +397,42 @@ public final class MainActivity extends ComponentActivity {
             for (var hit : result.objects()) {
                 var box = hit.box();
                 float left = box.left() * w, top = box.top() * h, right = box.right() * w, bottom = box.bottom() * h;
-                paint.setColor(hit.held() ? 0xff7fa996 : hit.isDoor() ? MINT : 0xffc2d6ff);
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawRoundRect(left, top, right, bottom, dp(6), dp(6), paint);
-                paint.setStyle(Paint.Style.FILL);
-                paint.setTextSize(dp(13));
-                float tagWidth = paint.measureText(hit.label()) + dp(14);
-                float tagX = Math.min(left, w - tagWidth), tagY = Math.max(0, top - dp(21));
-                canvas.drawRoundRect(tagX, tagY, tagX + tagWidth, tagY + dp(21), dp(4), dp(4), paint);
-                paint.setColor(Color.BLACK);
-                canvas.drawText(hit.label(), tagX + dp(7), tagY + dp(15), paint);
+                paint.setColor(hit.held() ? 0x997fa996 : hit.isDoor() ? MINT : 0xffc2d6ff);
+                float length = Math.min(dp(12), Math.min(right - left, bottom - top) / 3);
+                drawCorner(canvas, left, top, length, length);
+                drawCorner(canvas, right, top, -length, length);
+                drawCorner(canvas, left, bottom, length, -length);
+                drawCorner(canvas, right, bottom, -length, -length);
+            }
+            var occupied = new ArrayList<RectF>();
+            paint.setTextSize(dp(11));
+            paint.setShadowLayer(dp(2), 0, dp(1), Color.BLACK);
+            for (var hit : result.objects()) {
+                if (!hit.held()) drawLabel(canvas, hit, occupied, w, h);
+            }
+            paint.clearShadowLayer();
+        }
+
+        private void drawCorner(Canvas canvas, float x, float y, float dx, float dy) {
+            canvas.drawLine(x, y, x + dx, y, paint);
+            canvas.drawLine(x, y, x, y + dy, paint);
+        }
+
+        private void drawLabel(Canvas canvas, Findings.ObjectHit hit, ArrayList<RectF> occupied, float w, float h) {
+            float padding = dp(3);
+            float width = paint.measureText(hit.label()) + 2 * padding;
+            float height = paint.descent() - paint.ascent() + 2 * padding;
+            float x = Math.max(0, Math.min(hit.box().left() * w, w - width));
+            float top = hit.box().top() * h;
+            float[] positions = {top - height, top, hit.box().bottom() * h};
+            for (float y : positions) {
+                if (y < 0 || y + height > h || width > w) continue;
+                var bounds = new RectF(x, y, x + width, y + height);
+                if (occupied.stream().anyMatch(used -> RectF.intersects(used, bounds))) continue;
+                occupied.add(bounds);
+                paint.setColor(hit.isDoor() ? MINT : 0xffe2ebff);
+                canvas.drawText(hit.label(), x + padding, y + padding - paint.ascent(), paint);
+                break;
             }
         }
     }

@@ -3,12 +3,14 @@ package org.vicentric.indoorlens;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
 final class Findings {
+    static final int MAX_OBJECTS = 12;
     private static final String[] LABELS = {
         "Door", "Door", "Door", "Chair", "Table", "Couch", "Cabinet",
         "Refrigerator", "Window", "Pole", "Stairs", "Ramp"
@@ -19,6 +21,10 @@ final class Findings {
         float height() { return bottom - top; }
         float x() { return (left + right) / 2; }
         float y() { return (top + bottom) / 2; }
+        boolean centersClose(Box other) {
+            return Math.abs(x() - other.x()) < .22f * Math.min(width(), other.width())
+                && Math.abs(y() - other.y()) < .22f * Math.min(height(), other.height());
+        }
         float iou(Box other) {
             float intersection = Math.max(0, Math.min(right, other.right) - Math.max(left, other.left))
                 * Math.max(0, Math.min(bottom, other.bottom) - Math.max(top, other.top));
@@ -50,15 +56,34 @@ final class Findings {
                 candidates.add(new ObjectHit(LABELS[best], score, box));
             }
         }
-        candidates.sort(Comparator.comparingDouble(ObjectHit::score).reversed());
+        candidates.sort(Comparator.comparing(ObjectHit::isDoor).reversed()
+            .thenComparing(Comparator.comparingDouble(ObjectHit::score).reversed()));
         var results = new ArrayList<ObjectHit>();
         for (var candidate : candidates) {
             if (results.stream().noneMatch(hit -> hit.label().equals(candidate.label())
-                    && hit.box().iou(candidate.box()) > .45f)) results.add(candidate);
+                    && hit.box().centersClose(candidate.box()) && hit.box().iou(candidate.box()) > .45f)) {
+                results.add(candidate);
+                if (results.size() == MAX_OBJECTS) break;
+            }
         }
-        results.sort(Comparator.comparing(ObjectHit::isDoor).reversed()
-            .thenComparing(Comparator.comparingDouble(ObjectHit::score).reversed()));
-        return new ArrayList<>(results.subList(0, Math.min(8, results.size())));
+        return results;
+    }
+
+    static List<String> otherObjectCounts(Scene scene) {
+        var counts = new LinkedHashMap<String, Integer>();
+        for (var hit : scene.objects()) {
+            if (!hit.isDoor()) counts.merge(hit.label(), 1, Integer::sum);
+        }
+        var labels = new ArrayList<String>();
+        counts.forEach((label, count) -> {
+            String plural = switch (label) {
+                case "Stairs" -> "sets of stairs";
+                case "Couch" -> "couches";
+                default -> label.toLowerCase(java.util.Locale.ROOT) + "s";
+            };
+            labels.add(count == 1 ? label : count + " " + plural);
+        });
+        return labels;
     }
 
     // A text block can be inside, above, or beside a single door. Treat competing doors
@@ -84,10 +109,7 @@ final class Findings {
     static String spokenSummary(Scene scene) {
         var nearby = nearbyText(scene);
         var phrases = new ArrayList<String>();
-        var otherObjects = new LinkedHashSet<String>();
-        for (var hit : scene.objects()) {
-            if (!hit.isDoor()) otherObjects.add(hit.label());
-        }
+        var otherObjects = otherObjectCounts(scene);
         scene.objects().stream().filter(ObjectHit::isDoor)
             .sorted(Comparator.comparingDouble(hit -> hit.box().x())).forEach(door -> {
                 float x = door.box().x();

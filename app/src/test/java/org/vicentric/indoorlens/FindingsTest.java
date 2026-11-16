@@ -30,6 +30,20 @@ public class FindingsTest {
             Collections.emptyList(), Collections.singletonList(sign), true, true)).isEmpty());
     }
 
+    @Test public void keepsSeparateOverlappingInstancesAndReportsTheirCount() {
+        float[][] prediction = new float[16][4];
+        anchor(prediction, 0, 240, 300, 200, 180, 3, .88f);
+        anchor(prediction, 1, 244, 306, 195, 177, 3, .78f);
+        anchor(prediction, 2, 300, 300, 200, 180, 3, .73f);
+        anchor(prediction, 3, 280, 370, 250, 160, 4, .7f);
+        var objects = Findings.decode(prediction, 0, 0, 640, 640);
+        var scene = new Findings.Scene(objects, Collections.emptyList(), true, true);
+
+        assertEquals(3, objects.size());
+        assertEquals(Arrays.asList("2 chairs", "Table"), Findings.otherObjectCounts(scene));
+        assertTrue(Findings.spokenSummary(scene).contains("2 chairs"));
+    }
+
     @Test public void textBetweenCompetingDoorsStaysUnassigned() {
         var sign = new Findings.TextHit("Exit", new Findings.Box(.43f, .2f, .45f, .24f));
         var left = new Findings.ObjectHit("Door", .9f, new Findings.Box(.1f, .28f, .4f, .95f));
